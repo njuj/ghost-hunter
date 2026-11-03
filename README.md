@@ -77,7 +77,9 @@ I ran it on my everyday Windows 11 PC, without administrator rights. It opened 8
 - **Medium, attributed:** Windhawk theme mods hooking 38 functions in nearly every process, RivaTuner's overlay hooking `dxgi.dll`, and Discord's voice module hooking thread APIs.
 - **Low:** Chrome, Discord and Claude (all Chromium) hooking their own `ntdll`. That is Chromium's sandbox.
 
-The first version reported 1,324 criticals on the same machine. Following the trampolines and grouping by destination is what turned that into one.
+On a clean machine, as administrator, the picture is quiet. CI scans every process on GitHub's Windows runner: 130 processes in 16 seconds, **0 critical, 0 high, 0 medium** (7 low and 14 info, all JIT and runtime memory).
+
+The first version reported 1,324 criticals on my PC. Following the trampolines and grouping by destination is what turned that into one.
 
 ## Testing
 

@@ -14,6 +14,7 @@ have done on its own:
 
 from __future__ import annotations
 
+import ntpath
 import os
 import struct
 from dataclasses import dataclass, field
@@ -127,13 +128,13 @@ def _where(proc: Process, addr: int | None) -> tuple[str, bool]:
 
 
 def _norm(p: str | None) -> str:
-    return os.path.normcase(os.path.normpath(p)) if p else ""
+    return ntpath.normcase(ntpath.normpath(p)) if p else ""
 
 
 # ── the checks ───────────────────────────────────────────────────────────────
 
 def check_hollowing(proc: Process) -> list[Finding]:
-    if proc.image_base is None or not proc.path:
+    if not proc.image_base or not proc.path:                   # minimal processes (Registry, MemCompression) have no PEB image
         return []
     r = proc.region_at(proc.image_base)
     if r is None:
@@ -145,7 +146,7 @@ def check_hollowing(proc: Process) -> list[Finding]:
                         f"{proc.name} was started from {proc.path}, but the image its PEB points to at "
                         f"{proc.image_base:#x} is {prot_name(r.protect)} private memory, not a mapped file",
                         proc.image_base, r.size, proc.read(proc.image_base, 64), "T1055.012")]
-    if r.mapped_path and _norm(r.mapped_path) != _norm(proc.path) and os.path.basename(_norm(r.mapped_path)) != os.path.basename(_norm(proc.path)):
+    if r.mapped_path and _norm(r.mapped_path) != _norm(proc.path) and ntpath.basename(_norm(r.mapped_path)) != ntpath.basename(_norm(proc.path)):
         return [Finding("hollowed", "critical", "Process hollowing: the main image is a different file",
                         f"started as {proc.path}, but the image in memory is mapped from {r.mapped_path}",
                         proc.image_base, technique="T1055.012")]
@@ -368,12 +369,12 @@ def check_modules(proc: Process, ctx: Context, jit: bool, trampolines: dict[int,
         else:
             own = _norm(key) == main
             findings.append(Finding("inline-hook", "low" if own else "medium",
-                                    f"{n} hooked by {os.path.basename(key)}",
+                                    f"{n} hooked by {ntpath.basename(key)}",
                                     f"{names} now jump into {key}" + (" (the program hooks itself)" if own else
                                     ": usually a security product, an overlay or a customisation tool; malware does it to hide"),
                                     hs[0].addr, sum(h.size for h in hs), proc.read(hs[0].addr, 16), "T1056.004"))
     for path, n in selfpatch.items():
-        findings.append(Finding("modified-code", "info", f"{os.path.basename(path)} patched its own code",
+        findings.append(Finding("modified-code", "info", f"{ntpath.basename(path)} patched its own code",
                                 f"{n:,} bytes differ from disk: this runtime rewrites parts of itself while it runs (expected)"))
     for path, ps in patched.items():
         m = ps[0][0]
@@ -420,7 +421,7 @@ def check_imports(proc: Process, ctx: Context, trampolines: dict[int, str]) -> l
                                     f"at {base:#x} instead of the DLLs it imports: calls go through injected code first",
                                     slots[0], len(slots) * width, proc.read(base, 32), "T1055"))
         for path, slots in led.items():
-            findings.append(Finding("iat-hook", "medium", f"{len(slots)} import{'s' if len(slots) > 1 else ''} of {m.name} redirected to {os.path.basename(path)}",
+            findings.append(Finding("iat-hook", "medium", f"{len(slots)} import{'s' if len(slots) > 1 else ''} of {m.name} redirected to {ntpath.basename(path)}",
                                     f"entries of {m.name}'s import table go through a stub into {path}",
                                     slots[0], len(slots) * width, technique="T1056.004"))
     return findings

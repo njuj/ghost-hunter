@@ -87,7 +87,7 @@ def render(results: list[tuple[Process, list[Finding]]], skipped: int, elapsed: 
                 lines.append(paint(f"                {_hex(f.preview)}", "35"))
         lines.append("")
     if skipped:
-        lines.append(paint(f" {skipped} processes could not be opened (protected, or another user's: run as administrator to include them)", "2"))
+        lines.append(paint(f" {skipped} processes could not be opened (protected processes; without administrator rights, also other users' and system processes)", "2"))
     summary = "  ·  ".join(f"{counts[s]} {s}" for s in SEVERITIES if counts[s]) or "nothing injected found"
     lines.append(paint(f" {summary}", "1"))
     return "\n".join(lines) + "\n"

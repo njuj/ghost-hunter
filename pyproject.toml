@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghost-hunter"
+dynamic = ["version"]
+description = "Find code injected into running Windows processes: reflective DLLs, shellcode threads, process hollowing, inline and IAT hooks, module stomping. Read-only, zero dependencies."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "kira", email = "286490266+njuj@users.noreply.github.com" }]
+keywords = ["malware", "dfir", "memory-forensics", "process-injection", "edr", "threat-hunting", "windows", "blue-team"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/njuj/ghost-hunter"
+
+[project.scripts]
+ghost-hunter = "ghosthunter.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "ghosthunter.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["ghosthunter*"]
+

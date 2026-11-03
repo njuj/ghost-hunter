@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    # the live tests plant harmless injection-shaped artefacts in a child process and scan it
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: unit and live tests
+        run: python -m unittest discover -s tests -v
+      - name: install, then scan every process on the runner (as administrator)
+        shell: bash
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          pip install .
+          ghost-hunter --version
+          ghost-hunter --no-color --min-severity medium || test $? -eq 1
+
+  analysis:
+    # the analysis itself is pure Python over snapshots: it must run anywhere
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m unittest discover -s tests -v

@@ -110,6 +110,11 @@ def dump(proc: Process, findings: list[Finding], folder: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for s in (sys.stdout, sys.stderr):   # a piped Windows console is cp1252: never crash on a glyph
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     if sys.platform != "win32":
         print("ghost-hunter: this scans live Windows processes, so it needs Windows", file=sys.stderr)

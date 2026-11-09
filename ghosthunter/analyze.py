@@ -33,6 +33,15 @@ JIT_PROCESSES = {"node.exe", "java.exe", "javaw.exe", "chrome.exe", "msedge.exe"
                  "cursor.exe", "slack.exe", "discord.exe", "teams.exe", "ms-teams.exe", "spotify.exe", "claude.exe",
                  "electron.exe", "obsidian.exe", "notion.exe", "figma.exe", "whatsapp.exe", "steamwebhelper.exe"}
 V8_MARKERS = ("v8_context_snapshot.bin", "snapshot_blob.bin", "icudtl.dat")
+CHROMIUM_MODULES = {"chrome.dll", "msedge.dll", "libcef.dll", "chrome_elf.dll", "msedge_elf.dll"}
+# ntdll functions Chromium's sandbox broker rewrites in every sandboxed child (sandbox/win/src/interceptors.h).
+CHROMIUM_SANDBOX_NT = {
+    "NtMapViewOfSection", "NtUnmapViewOfSection", "NtSetInformationThread", "NtOpenThreadToken",
+    "NtOpenThreadTokenEx", "NtOpenProcessToken", "NtOpenProcessTokenEx", "NtCreateFile", "NtOpenFile",
+    "NtQueryAttributesFile", "NtQueryFullAttributesFile", "NtSetInformationFile", "NtOpenThread", "NtOpenProcess",
+    "NtOpenSection", "NtCreateSection", "NtOpenKey", "NtOpenKeyEx", "NtCreateKey", "NtOpenEvent", "NtCreateEvent",
+    "NtOpenMutant", "NtCreateMutant", "NtOpenSemaphore", "NtCreateSemaphore",
+}
 
 # Runtimes that rewrite their own code while they run (GC write barriers, lazily bound imports).
 SELF_PATCHING = {"clr.dll", "coreclr.dll", "mscorwks.dll", "msys-2.0.dll", "cygwin1.dll", "jvm.dll", "mono-2.0-bdwgc.dll"}
@@ -81,6 +90,24 @@ def is_jit_host(proc: Process) -> bool:
         except OSError:
             return False
     return False
+
+
+def is_chromium(proc: Process) -> bool:
+    """Chrome, Edge and every Electron/CEF app: the ones whose children run inside Chromium's sandbox."""
+    if any(m.name.lower() in CHROMIUM_MODULES for m in proc.modules):
+        return True
+    if proc.path:
+        try:
+            return all(os.path.exists(os.path.join(os.path.dirname(proc.path), m)) for m in V8_MARKERS[1:])
+        except OSError:
+            return False
+    return False
+
+
+def _chromium_sandbox(proc: Process, hooks: list) -> bool:
+    """Every hook is an ntdll stub Chromium's sandbox intercepts, in a Chromium process: the broker did it."""
+    return bool(hooks) and is_chromium(proc) and all(
+        h.module.name.lower() == "ntdll.dll" and h.label in CHROMIUM_SANDBOX_NT for h in hooks)
 
 
 def _allocations(proc: Process) -> dict[int, list[Region]]:
@@ -362,6 +389,12 @@ def check_modules(proc: Process, ctx: Context, jit: bool, trampolines: dict[int,
         if key == "?":
             findings.append(Finding("inline-hook", "high", f"{n} rewritten in memory", f"{names}: their first bytes changed",
                                     hs[0].addr, sum(h.size for h in hs), proc.read(hs[0].addr, 16), "T1562"))
+        elif key.startswith("@") and _chromium_sandbox(proc, hs):
+            # low, not info: malware hiding behind the same pattern still shows up in a normal scan
+            findings.append(Finding("inline-hook", "low", f"{n} redirected by Chromium's sandbox",
+                                    f"{names} jump to private memory at {key[1:]}: the sandbox broker routes these "
+                                    "ntdll calls through its policy checks in every sandboxed Chromium/Electron child "
+                                    "(expected)", hs[0].addr, sum(h.size for h in hs), proc.read(hs[0].addr, 16), "T1055"))
         elif key.startswith("@"):
             findings.append(Finding("inline-hook", "critical", f"{n} hooked into memory no file stands behind",
                                     f"{names} now jump to private memory at {key[1:]}: injected code runs before the real function",

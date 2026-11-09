@@ -152,6 +152,32 @@ class Hooks(unittest.TestCase):
         self.assertEqual(rules(found), [("inline-hook", "critical")])     # the landing memory is not reported twice
         self.assertIn("fake.dll!DoWork", found[0].detail)
 
+    def _sandboxed(self, export: str, chromium: bool):
+        """A child process whose ntdll stub jumps into private memory, the way Chromium's broker patches it."""
+        mem = Memory()
+        ntdll, chrome, CHROME_BASE = r"C:\Windows\System32\ntdll.dll", r"C:\app\chrome.dll", DLL_BASE + 0x10000000
+        nt_pe = make_pe(DLL_CODE, relocs=[0x1010], exports={export: 0x1000, "Other": 0x1020})
+        exe, nt = load(mem, EXE_BASE, EXE_PE), load(mem, DLL_BASE, nt_pe)
+        regions = image_regions(EXE_BASE, EXE, exe) + image_regions(DLL_BASE, ntdll, nt)
+        files = {EXE.lower(): EXE_PE, ntdll.lower(): nt_pe}
+        if chromium:
+            regions += image_regions(CHROME_BASE, chrome, load(mem, CHROME_BASE, DLL_PE))
+            files[chrome.lower()] = DLL_PE
+        mem.put(HEAP, b"\xc3" * 0x1000)
+        regions.append(Region(HEAP, 0x1000, HEAP, RX, RX, MEM_PRIVATE))
+        proc = Process(4242, "app.exe", EXE, regions, [], EXE_BASE, False, mem.read, mem.private_pages)
+        mem.write(DLL_BASE + 0x1000, b"\xff\x25\x00\x00\x00\x00" + HEAP.to_bytes(8, "little"))
+        return analyze(proc, Context(read_file=lambda p: files[p.lower()]))
+
+    def test_chromium_sandbox_interception_is_low(self):
+        found = self._sandboxed("NtOpenFile", chromium=True)
+        self.assertEqual(rules(found), [("inline-hook", "low")])
+        self.assertIn("Chromium's sandbox", found[0].title)
+
+    def test_same_hook_outside_chromium_or_on_other_function_stays_critical(self):
+        self.assertEqual(rules(self._sandboxed("NtOpenFile", chromium=False)), [("inline-hook", "critical")])
+        self.assertEqual(rules(self._sandboxed("NtWriteVirtualMemory", chromium=True)), [("inline-hook", "critical")])
+
     def test_hook_through_a_trampoline_into_another_dll_is_attributed(self):
         mem = Memory()
         tramp = DLL_BASE - 0x100000                                    # within reach of a rel32 jump

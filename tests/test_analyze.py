@@ -242,7 +242,8 @@ class Other(unittest.TestCase):
         teb, limit, top, code_at = 0x30000000, 0x31000000, 0x31002000, HEAP
         mem.put(teb, struct.pack("<QQQ", 0, top, limit))
         ret = code_at + len(code)
-        stack = struct.pack("<QQQ", HEAP + 0x5000, DLL_BASE + 0x1004, ret).ljust(0x2000, b"\0")
+        stack = struct.pack("<QQQQ", HEAP + 0x5000, DLL_BASE + 0x1004, ret, code_at).ljust(0x2000, b"\0")
+        # code_at itself (a function pointer to the block) must never be taken for the return address
         mem.put(limit, stack)
         mem.put(code_at, code.ljust(0x1000, b"\0"))
         extra = [Region(code_at, 0x1000, code_at, alloc_prot, region_prot, MEM_PRIVATE),

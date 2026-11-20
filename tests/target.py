@@ -1,13 +1,17 @@
 """A harmless test subject: a process that does one injection-shaped thing *to itself*, prints "ready"
-and sleeps until it is killed. No code it plants is ever executed: the planted thread stays
-suspended, the hooked function is never called, the stomped DLL is mapped without running.
+and sleeps until it is killed. Planted code is not executed: the planted thread stays suspended, the
+hooked function is never called, the stomped DLL is mapped without running. The two exceptions are
+"sleeper" and "masked": a 32-byte stub whose only instruction of substance is a call to SleepEx(INFINITE),
+run from a normal Python thread, so a return address into private memory sits on that thread's stack.
+"masked" then XORs the stub and makes it non-executable, as sleep-masking implants do while they wait.
 
-    python target.py clean | thread | pe | hook | iat | stomp | rwx
+    python target.py clean | thread | pe | hook | iat | stomp | rwx | sleeper | masked
 """
 
 import ctypes
 import os
 import sys
+import threading
 import time
 from ctypes import wintypes as W
 
@@ -78,6 +82,26 @@ def main(mode: str) -> None:
         base = k32.LoadLibraryExW(dll, None, DONT_RESOLVE_DLL_REFERENCES)   # mapped, DllMain not run
         patch(base + 0x1000, b"\xcc" * 0x3000)                  # overwrite 12 KB of its code with int3
         info = {"addr": base + 0x1000}
+    elif mode in ("sleeper", "masked"):
+        sleep_ex = k32.GetProcAddress(k32.GetModuleHandleW("kernel32.dll"), b"SleepEx")
+        stub = (b"\x48\x83\xec\x28"                          # sub rsp, 0x28
+                b"\xb9\xff\xff\xff\xff"                      # mov ecx, INFINITE
+                b"\x31\xd2"                                  # xor edx, edx
+                b"\x48\xb8" + sleep_ex.to_bytes(8, "little") +  # mov rax, SleepEx
+                b"\xff\xd0"                                  # call rax: the return address below lands on the stack
+                b"\x48\x83\xc4\x28\xc3")                      # add rsp, 0x28; ret (never reached)
+        if mode == "sleeper":
+            addr = alloc(stub, RX)
+        else:
+            addr = k32.VirtualAlloc(None, 0x1000, MEM, RWX)
+            ctypes.memmove(addr, stub, len(stub))
+        threading.Thread(target=ctypes.CFUNCTYPE(None)(addr), daemon=True).start()
+        time.sleep(0.5)                                         # the thread is now inside SleepEx
+        if mode == "masked":
+            old = W.DWORD()
+            k32.VirtualProtect(addr, 0x1000, RW, ctypes.byref(old))
+            ctypes.memmove(addr, bytes(b ^ 0x5A for b in stub), len(stub))   # "encrypted" while it sleeps
+        info = {"addr": addr, "ret": addr + 23}
     elif mode != "clean":
         raise SystemExit(f"unknown mode {mode}")
     print("ready", " ".join(f"{k}={v}" for k, v in info.items()), flush=True)

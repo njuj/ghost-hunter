@@ -77,6 +77,20 @@ class Live(unittest.TestCase):
         self.assertEqual(self.serious(found), [("modified-code", "critical")])
         self.assertIn("dbghelp.dll", found[0].title)
 
+    def test_thread_sleeping_inside_injected_code(self):
+        p, info = self.spawn("sleeper")
+        found = self.scan(p.pid)
+        self.assertEqual(self.serious(found), [("stack-return", "critical")])
+        self.assertEqual(found[0].address, int(info["ret"]))
+        self.assertIn("after a call instruction", found[0].detail)
+
+    def test_sleep_masked_code(self):
+        p, info = self.spawn("masked")
+        found = self.scan(p.pid)
+        self.assertEqual(self.serious(found), [("stack-return", "critical")])
+        self.assertEqual(found[0].title, "Sleeping code hidden as non-executable memory")
+        self.assertEqual(found[0].address, int(info["ret"]))
+
     def test_cli_json_and_exit_code(self):
         p, _ = self.spawn("thread")
         r = subprocess.run([sys.executable, "-m", "ghosthunter", "--pid", str(p.pid), "--json"], cwd=ROOT,

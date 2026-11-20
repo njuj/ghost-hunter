@@ -67,6 +67,7 @@ class Module:
 class Thread:
     tid: int
     start: int
+    teb: int = 0                   # its TEB, where the stack bounds are (0 when unknown)
 
 
 @dataclass

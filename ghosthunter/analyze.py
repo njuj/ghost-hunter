@@ -10,6 +10,8 @@ have done on its own:
   modified-code     code pages of a DLL that differ from the DLL on disk (module stomping, patching)
   phantom-module    a DLL mapped from a file that no longer exists (doppelganging, phantom hollowing)
   unbacked-exec     the rest of the executable memory without a file behind it (JIT engines do this too)
+  stack-return      a thread's stack returns into memory no file stands behind, or into code that was made
+                    non-executable while the thread waits (sleep masking)
 """
 
 from __future__ import annotations
@@ -460,6 +462,81 @@ def check_imports(proc: Process, ctx: Context, trampolines: dict[int, str]) -> l
     return findings
 
 
+MAX_STACK = 1 << 20
+
+
+def call_before(prefix: bytes) -> bool:
+    """Do the 7 bytes before a return address end with a call instruction?"""
+    if len(prefix) < 7:
+        return False
+    p = prefix
+    return (p[-5] == 0xE8                                                   # call rel32
+            or p[-6:-4] == b"\xff\x15"                                       # call [rip+disp32]
+            or (p[-2] == 0xFF and 0xD0 <= p[-1] <= 0xD7)                    # call reg
+            or (p[-3] in (0x41, 0x48, 0x49) and p[-2] == 0xFF and 0xD0 <= p[-1] <= 0xD7)
+            or (p[-3] == 0xFF and 0x50 <= p[-2] <= 0x57)                    # call [reg+disp8]
+            or (p[-6] == 0xFF and 0x90 <= p[-5] <= 0x97))                   # call [reg+disp32]
+
+
+def check_stacks(proc: Process, jit: bool) -> list[Finding]:
+    """Walk each thread's stack for return addresses into private memory. A sleeping implant can start its
+    threads inside a real DLL and hide its code while it waits, but the way back into that code has to stay
+    on the stack. Read-only: the stack is read from the TEB's bounds, no thread is suspended."""
+    if proc.wow64:
+        return []                                       # shortcut: 32-bit stacks not walked, add if WOW64 matters
+    hits: dict[int, dict] = {}
+    for t in proc.threads:
+        if not t.teb:
+            continue
+        tib = proc.read(t.teb, 0x18)
+        if len(tib) < 0x18:
+            continue
+        top, limit = struct.unpack_from("<QQ", tib, 8)
+        if not 0 < limit < top or top - limit > MAX_STACK:
+            continue
+        stack = proc.read(limit, top - limit)
+        seen: set[int] = set()
+        for (v,) in struct.iter_unpack("<Q", stack[:len(stack) & ~7]):
+            if v < 0x10000 or v in seen:
+                continue
+            seen.add(v)
+            r = proc.region_at(v)
+            if r is None or r.type == MEM_IMAGE:
+                continue
+            alloc_exec = bool(r.alloc_protect & EXECUTABLE)
+            if not (r.executable or alloc_exec):
+                continue                                # a pointer to data, not a way back into code
+            called = call_before(proc.read(v - 7, 7))
+            if r.executable and not called:
+                continue
+            h = hits.setdefault(r.alloc_base, {"tids": [], "ret": v, "masked": False, "region": r})
+            if t.tid not in h["tids"]:
+                h["tids"].append(t.tid)
+            if not r.executable:
+                h["masked"], h["ret"], h["region"] = True, v, r
+    findings = []
+    for base, h in sorted(hits.items()):
+        r, tids, n = h["region"], h["tids"], len(h["tids"])
+        who = f"thread{'s' if n > 1 else ''} {', '.join(map(str, tids[:8]))}"
+        if h["masked"]:
+            findings.append(Finding(
+                "stack-return", "medium" if jit else "critical", "Sleeping code hidden as non-executable memory",
+                f"{who} will return to {h['ret']:#x}, in private {prot_name(r.protect)} memory that was allocated "
+                f"{prot_name(r.alloc_protect)}: the code was made non-executable while it waits, the way sleep-masking "
+                f"implants (Ekko, Foliage, Cobalt Strike sleep mask) hide from memory scanners",
+                h["ret"], r.size, proc.read(r.base, 32), "T1055"))
+        else:
+            findings.append(Finding(
+                "stack-return", "info" if jit else "critical",
+                f"{n} thread{'s' if n > 1 else ''} running " + ("JIT-compiled code" if jit else "code no file stands behind"),
+                f"{who} will return to {h['ret']:#x}, right after a call instruction in private "
+                f"{prot_name(r.protect)} memory: " + ("expected, this process runs a JIT engine (JavaScript, .NET or Java)"
+                                                     if jit else "injected code is on the call stack even though the "
+                                                     "thread started inside a real module"),
+                h["ret"], r.size, proc.read(h["ret"] - 16, 32), "T1055"))
+    return findings
+
+
 def analyze(proc: Process, ctx: Context | None = None) -> list[Finding]:
     ctx = ctx or Context()
     jit = is_jit_host(proc)
@@ -467,5 +544,10 @@ def analyze(proc: Process, ctx: Context | None = None) -> list[Finding]:
     hooks = check_modules(proc, ctx, jit, trampolines)
     imports = check_imports(proc, ctx, trampolines)
     findings = check_hollowing(proc) + check_private_code(proc, jit, trampolines) + hooks + imports
+    started = {f.address for f in findings if f.rule == "thread-start"}
+    for f in check_stacks(proc, jit):
+        r = proc.region_at(f.address)
+        if f.severity == "info" or r is None or r.alloc_base not in started or "non-executable" in f.title:
+            findings.append(f)                          # a thread that started there is reported once already
     from .model import RANK
     return sorted(findings, key=lambda f: (RANK[f.severity], f.address or 0))

@@ -134,14 +134,19 @@ def _threads_by_pid() -> dict[int, list[int]]:
     return out
 
 
-def _thread_start(tid: int) -> int | None:
+def _thread_info(tid: int) -> tuple[int | None, int]:
+    """(start address, TEB address) of a thread; read-only queries, the thread keeps running."""
     h = k32.OpenThread(THREAD_QUERY_INFORMATION, False, tid)
     if not h:
-        return None
+        return None, 0
     try:
         addr = ctypes.c_void_p()
         status = ntdll.NtQueryInformationThread(h, 9, ctypes.byref(addr), ctypes.sizeof(addr), None)  # Win32StartAddress
-        return addr.value if status == 0 and addr.value else None
+        tbi = (ctypes.c_byte * 48)()                                                                  # THREAD_BASIC_INFORMATION
+        teb = 0
+        if ntdll.NtQueryInformationThread(h, 0, tbi, 48, None) == 0:
+            teb = ctypes.c_uint64.from_buffer(tbi, 8).value
+        return (addr.value if status == 0 and addr.value else None), teb
     finally:
         k32.CloseHandle(h)
 
@@ -243,7 +248,7 @@ def snapshot(pid: int, name: str = "", threads: dict[int, list[int]] | None = No
     """A Process snapshot backed by a live handle (keep the LiveProcess open while analysing)."""
     lp = LiveProcess(pid)
     tids = (threads if threads is not None else _threads_by_pid()).get(pid, [])
-    ths = [Thread(t, s) for t in tids if (s := _thread_start(t))]
+    ths = [Thread(t, s, teb) for t in tids for s, teb in [_thread_info(t)] if s]
     path = lp.image_path()
     proc = Process(pid, name or (os.path.basename(path) if path else str(pid)), path, lp.regions(), ths,
                    lp.peb_image_base(), lp.wow64(), lp.read, lp.private_code_pages)

@@ -235,6 +235,46 @@ class Other(unittest.TestCase):
         jit = make_process(mem, extra=rwx, name="node.exe")
         self.assertEqual(rules(analyze(jit[0], jit[2])), [("unbacked-exec", "info")])
 
+    def stack_process(self, region_prot, alloc_prot, code, jit=False):
+        """A thread whose stack (described by its TEB) holds a heap pointer, a module return address and a
+        return address into a private region."""
+        mem = Memory()
+        teb, limit, top, code_at = 0x30000000, 0x31000000, 0x31002000, HEAP
+        mem.put(teb, struct.pack("<QQQ", 0, top, limit))
+        ret = code_at + len(code)
+        stack = struct.pack("<QQQ", HEAP + 0x5000, DLL_BASE + 0x1004, ret).ljust(0x2000, b"\0")
+        mem.put(limit, stack)
+        mem.put(code_at, code.ljust(0x1000, b"\0"))
+        extra = [Region(code_at, 0x1000, code_at, alloc_prot, region_prot, MEM_PRIVATE),
+                 Region(HEAP + 0x5000, 0x1000, HEAP + 0x5000, RW, RW, MEM_PRIVATE)]
+        proc, _, ctx = make_process(mem, extra=extra, threads=[Thread(77, DLL_BASE + 0x1000, teb)],
+                                 name="chrome.exe" if jit else "app.exe")
+        return analyze(proc, ctx), ret
+
+    def test_return_into_private_code_on_a_stack(self):
+        found, ret = self.stack_process(RX, RW, b"\x90" * 8 + b"\xff\xd0")        # ... call rax
+        self.assertEqual([(f.rule, f.severity, f.address) for f in found if f.rule == "stack-return"],
+                         [("stack-return", "critical", ret)])
+        self.assertIn("thread 77", found[0].detail)
+
+    def test_sleep_masked_region_on_a_stack(self):
+        found, ret = self.stack_process(RW, RWX, bytes(range(40, 50)))             # encrypted: no call shape
+        sr = [f for f in found if f.rule == "stack-return"]
+        self.assertEqual([(f.severity, f.address) for f in sr], [("critical", ret)])
+        self.assertIn("sleep", sr[0].title.lower())
+
+    def test_stack_pointers_that_are_not_return_addresses_are_ignored(self):
+        found, _ = self.stack_process(RX, RW, b"\x90" * 10)                       # no call before it
+        self.assertEqual([f for f in found if f.rule == "stack-return"], [])
+        found, _ = self.stack_process(RW, RW, b"\xff\xd0" * 5)                  # plain data, never executable
+        self.assertEqual([f for f in found if f.rule == "stack-return"], [])
+
+    def test_call_shapes(self):
+        from ghosthunter.analyze import call_before
+        for tail in (b"\xe8\x01\x02\x03\x04", b"\xff\x15\x01\x02\x03\x04", b"\xff\xd3", b"\x41\xff\xd2", b"\xff\x50\x08"):
+            self.assertTrue(call_before(tail.rjust(7, b"\x90")), tail.hex())
+        self.assertFalse(call_before(b"\x90" * 7))
+
     def test_jump_encodings(self):
         read = {0x2000 + 6: (0x7777).to_bytes(8, "little")}.get
         r = lambda a, n: read(a, b"")[:n]  # noqa: E731

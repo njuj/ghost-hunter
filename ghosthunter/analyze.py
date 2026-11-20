@@ -501,8 +501,8 @@ def check_stacks(proc: Process, jit: bool) -> list[Finding]:
                 continue
             seen.add(v)
             r = proc.region_at(v)
-            if r is None or r.type == MEM_IMAGE:
-                continue
+            if r is None or r.type == MEM_IMAGE or v in (r.base, r.alloc_base):
+                continue                                # a return address always follows a call, never starts a block
             alloc_exec = bool(r.alloc_protect & EXECUTABLE)
             if not (r.executable or alloc_exec):
                 continue                                # a pointer to data, not a way back into code

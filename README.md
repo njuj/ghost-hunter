@@ -8,6 +8,8 @@
 ![os](https://img.shields.io/badge/os-Windows-00e5ff?labelColor=0b0f17)
 ![license](https://img.shields.io/badge/license-MIT-00e5ff?labelColor=0b0f17)
 
+<p align="center"><img src="docs/demo.svg" width="100%" alt="ghost-hunter running in a terminal"/></p>
+
 Malware likes to live inside someone else's process. Once it is there it has no file of its own, and its code runs under the name of `explorer.exe` or `svchost.exe`. EDR products look for that. ghost-hunter does the same in about 1,200 readable lines, and it explains every finding in plain words.
 
 ```text

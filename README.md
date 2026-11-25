@@ -1,5 +1,7 @@
 # ghost-hunter
 
+[![Part of Cryptid Security](https://img.shields.io/badge/part_of-Cryptid%20Security-00ff9c?style=flat-square&labelColor=0d1117)](https://github.com/cryptid-security)
+
 **Find code injected into running Windows processes.** ghost-hunter looks for reflectively loaded DLLs, shellcode threads, hollowed processes, inline and import-table hooks, stomped modules, and implants sleeping with their code encrypted (sleep masking). It reads each process from the outside and never writes to one. It needs nothing but Python's standard library.
 
 [![ci](https://github.com/njuj/ghost-hunter/actions/workflows/ci.yml/badge.svg)](https://github.com/njuj/ghost-hunter/actions/workflows/ci.yml)
